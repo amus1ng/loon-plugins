@@ -6884,7 +6884,7 @@ var TeldLoon = (function () {
     if (updated.ClientIP) session.clientIp = updated.ClientIP;
     save(session, KEY);
   }
-  async function snapshot(session) {
+  async function snapshot(session, includeTasks) {
     var day = new Date(Date.now() + (session.offset || 0) * 1000 + 8 * 3600000).toISOString().slice(0, 10);
     var result = await http("ProSrv-GetCheckInStatus", "request", JSON.stringify({ YearMonth: Number(day.slice(0, 7).replace("-", "")) }), session);
     if (String(result.errcode) === "12904") return { kind: "inactive", day: day };
@@ -6893,9 +6893,12 @@ var TeldLoon = (function () {
     var state = {
       kind: data.ChallengeStatus === 1 ? "active" : "inactive", day: day,
       id: data.ChallengeID, status: data.CompleteDailyTask, days: data.ContinuousDays, tasks: null,
+      challengeStatus: data.ChallengeStatus, targetDays: data.TargetDays,
+      rewardName: data.RewardInfo && typeof data.RewardInfo.RewardName === "string"
+        ? data.RewardInfo.RewardName.trim().slice(0, 120) : "",
     };
     // The final successful check-in can finish the challenge. Retain its confirmation fields.
-    if (data.ChallengeStatus !== 1) return state;
+    if (data.ChallengeStatus !== 1 || includeTasks === false) return state;
     var task = await http("ProSrv-GetCheckInTask", "request", JSON.stringify({ MakeUpDate: "" }), session);
     if (String(task.state) !== "1") fail("query_failed");
     state.tasks = task.data && task.data.DailyTasks;
@@ -6908,6 +6911,18 @@ var TeldLoon = (function () {
     if (state.status !== 1 || !Array.isArray(state.tasks)) return "unknown";
     return state.tasks.length ? "manual" : "ready";
   }
+  function describe(state) {
+    if (!state.id) return "未获取到当前已选奖品信息。";
+    function days(value) {
+      var number = Number(value);
+      return value != null && value !== "" && Number.isInteger(number) && number >= 0 ? number + " 天" : "未知";
+    }
+    var statuses = { 1: "挑战中", 2: "挑战成功", 3: "挑战失败", 4: "已放弃" };
+    return "当前奖品：" + (state.rewardName || "接口未返回名称") +
+      "\n挑战目标：" + days(state.targetDays) + "；已连续打卡：" + days(state.days) +
+      "\n挑战状态：" + (statuses[state.challengeStatus] || "未知") +
+      "；今日：" + (state.status === 2 ? "已完成" : state.status === 1 ? "未完成" : "未知");
+  }
   async function run(mode) {
     var session = read(KEY);
     if (!session) fail("login_required");
@@ -6917,15 +6932,16 @@ var TeldLoon = (function () {
     save({ owner: owner, until: Date.now() + 120000 }, LOCK);
     try {
       await ensureAccess(session);
-      var state = await snapshot(session), action = decide(state);
-      if (action === "inactive") return notify("需要手动查看", "当前没有进行中的挑战，或挑战已经结束。");
-      if (action === "done") return notify("今日已完成", "连续打卡 " + (state.days || 0) + " 天。");
+      var state = await snapshot(session, mode !== "reward"), action = decide(state);
+      if (mode === "reward") return notify(state.id ? "当前打卡奖品" : "尚无当前挑战", describe(state));
+      if (action === "inactive") return notify("需要手动查看", describe(state) + "\n当前没有进行中的挑战，或挑战已经结束。");
+      if (action === "done") return notify("今日已完成", describe(state));
       if (action === "unknown") fail("unknown_state");
       if (action === "manual") {
         var names = state.tasks.map(function (task) { return TASKS[task.TaskType] || "未知任务"; });
-        return notify("今日有任务，已跳过", names.join("、") + "。请在特来电手动处理。");
+        return notify("今日有任务，已跳过", describe(state) + "\n今日任务：" + names.join("、") + "。请在特来电手动处理。");
       }
-      if (mode === "status") return notify("今日可直接打卡", "当前无任务、今日未完成。本次仅查询，没有提交。");
+      if (mode === "status") return notify("今日可直接打卡", describe(state) + "\n当前无任务。本次仅查询，没有提交。");
       if (sessionId(read(KEY) || {}) !== sessionId(session)) fail("account_changed");
       if ((read(LOCK) || {}).owner !== owner) fail("unknown_state");
       var attemptKey = state.day + ":" + sha(sessionId(session) + ":" + state.id);
@@ -6935,7 +6951,7 @@ var TeldLoon = (function () {
       var after = await snapshot(session);
       if (String(result.state) !== "1" || !result.data || result.data.IsCheckInSuccess !== true ||
           after.id !== state.id || after.day !== state.day || after.status !== 2) fail("verification_failed");
-      notify("打卡成功", "已重新查询确认，连续打卡 " + (after.days || 0) + " 天。");
+      notify("打卡成功", describe(after) + "\n已重新查询确认今日完成。");
     } finally {
       if ((read(LOCK) || {}).owner === owner) $persistentStore.write(null, LOCK);
     }
@@ -6965,7 +6981,7 @@ var TeldLoon = (function () {
         if (mode === "clear") {
           [KEY, ATTEMPT, LOCK].forEach(function (key) { if (!$persistentStore.write(null, key)) fail("storage_failed"); });
           notify("已清除本插件登录态", "关闭获取规则后将不再保存新的登录态。");
-        } else if (mode === "status" || mode === "run") await run(mode);
+        } else if (mode === "status" || mode === "run" || mode === "reward") await run(mode);
         else fail("unknown_state");
       }
     } catch (error) { reportError(error); }

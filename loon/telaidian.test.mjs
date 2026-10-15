@@ -14,7 +14,7 @@ const sessionKey = "telaidian.loon.session.v1";
 const attemptKey = "telaidian.loon.attempt.v1";
 const baseSession = { version: 1, accessToken: access, refreshToken: refresh, clientIp: "192.0.2.1", userAgent: "fixture-agent", origin: "https://c2.teld.cc" };
 const success = (data) => ({ state: "1", errcode: null, data });
-const status = (extra = {}) => success({ ChallengeID: "fixture-challenge", ChallengeStatus: 1, CompleteDailyTask: 1, ContinuousDays: 8, ...extra });
+const status = (extra = {}) => success({ ChallengeID: "fixture-challenge", ChallengeStatus: 1, CompleteDailyTask: 1, ContinuousDays: 8, TargetDays: 30, RewardInfo: { RewardName: "测试充电券" }, ...extra });
 const tasks = (list = []) => success({ DailyTasks: list });
 
 function setup(store = new Map()) {
@@ -135,6 +135,22 @@ assert(!result.store.has(sessionKey));
 result = await execute({ mode: "status", queue: [status(), tasks()] });
 assert.equal(result.requests.length, 2);
 assert(!result.store.has(attemptKey));
+assert(result.notifications.some((n) => n[2].includes("当前奖品：测试充电券") && n[2].includes("挑战目标：30 天") && n[2].includes("已连续打卡：8 天")));
+
+result = await execute({ mode: "reward", queue: [status({ RewardInfo: { RewardName: "测试奖品 B", ReceivingAddress: "PRIVATE-ADDRESS-MARKER" } })] });
+assert.equal(result.requests.length, 1, "reward detection only queries current challenge, without tasks or writes");
+assert.equal(sid(result.requests[0]), "ProSrv-GetCheckInStatus");
+assert(result.notifications.some((n) => n[1] === "当前打卡奖品" && n[2].includes("测试奖品 B")));
+assert(!JSON.stringify(result.notifications).includes("PRIVATE-ADDRESS-MARKER"));
+assert(!JSON.stringify([...result.store]).includes("PRIVATE-ADDRESS-MARKER"));
+assert(!result.store.has(attemptKey));
+
+result = await execute({ mode: "reward", queue: [status({ ChallengeStatus: 2, CompleteDailyTask: 2 })] });
+assert(result.notifications.some((n) => n[2].includes("挑战成功") && n[2].includes("当前奖品：测试充电券")));
+result = await execute({ mode: "reward", queue: [{ state: "0", errcode: "12904", data: null }] });
+assert(result.notifications.some((n) => n[1] === "尚无当前挑战"));
+result = await execute({ mode: "reward", queue: [status({ RewardInfo: null, TargetDays: undefined })] });
+assert(result.notifications.some((n) => n[2].includes("接口未返回名称") && n[2].includes("挑战目标：未知")));
 for (const list of [[{ TaskType: 3, IsCompleted: false }], [{ TaskType: 2, IsCompleted: true }]]) {
   result = await execute({ queue: [status(), tasks(list)] });
   assert(!result.requests.some((r) => sid(r) === "ProSrv-CompleteCheckInTask"));
@@ -196,4 +212,5 @@ for (const line of plugin.split(/\r?\n/).filter((l) => l.startsWith("http-reques
   assert(!regex.test("https://unrelated.example/"));
 }
 assert(plugin.includes('cron "0 9 * * *"'));
+assert(plugin.includes('tag=特来电查看奖品,argument="mode=reward"'));
 console.log("PASS: official RSA/AES parity, signatures, p/token capture, renewal, task guards, post-write confirmation, no retries after uncertain writes, local credential isolation and Loon config");

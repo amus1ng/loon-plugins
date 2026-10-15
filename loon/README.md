@@ -10,16 +10,23 @@
 - `telaidian.js`：完整脚本，已经打包 CryptoJS；不需要额外下载运行时依赖。
 - `LICENSE-CryptoJS.txt`：第三方库许可证。
 
-要求：iOS/iPadOS 15 或以上、支持本地脚本的 Loon。插件使用官方仍兼容的传统脚本配置语法。
+要求：iOS/iPadOS 15 或以上、支持脚本的 Loon。插件使用官方仍兼容的传统脚本配置语法。
 
 ## 安装
 
-1. 将 `telaidian.js` 传到手机并保存到 **Loon 本地脚本库**，名称保持为 `telaidian.js`。在 Loon 脚本编辑器中新建同名脚本、粘贴完整 JS 内容也可以。
-2. 导入 `telaidian.plugin`。如果当前 Loon 的插件导入界面只接受 URL，可将配置中的 `[Script]` 条目合入主配置对应节，将三个 `[Mitm] hostname` 追加到现有列表；不要覆盖其他插件的域名。
-3. 确认 Loon 的脚本、复写和 HTTPS 解密可用，且用于解密的 Loon 证书已按官方流程配置并信任。插件只添加 `c2.teld.cn`、`c2.teld.cc` 和 `sgi.teld.cn` 三个 HTTPS 解密域名，匹配的脚本仅处理活动页、打卡状态/任务查询及 H5 续期请求。
-4. 保持两条“特来电获取登录态”规则开启。
+在 Loon 的插件页面添加以下地址：
 
-没有公网托管地址，所以当前交付的是本地脚本版本，不包含虚构的远程安装链接。若以后将文件放在自己的 HTTPS 静态地址，先把 `.plugin` 中所有 `script-path=telaidian.js` 改成实际 JS 的完整 HTTPS 地址，再通过真实插件 URL 安装。
+```text
+https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.plugin
+```
+
+[打开插件配置](https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.plugin) · [完整脚本](https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js)
+
+1. 导入后，Loon 会从本仓库自动下载 `telaidian.js`，无需手动导入 JS 文件。
+2. 确认 Loon 的脚本、复写和 HTTPS 解密可用，且用于解密的 Loon 证书已按官方流程配置并信任。插件只添加 `c2.teld.cn`、`c2.teld.cc` 和 `sgi.teld.cn` 三个 HTTPS 解密域名，匹配的脚本仅处理活动页、打卡状态/任务查询及 H5 续期请求。
+3. 保持两条“特来电获取登录态”规则开启，然后按下一节操作。
+
+如需完全使用本地文件，可将 `telaidian.js` 保存到 Loon 本地脚本库，并将 `.plugin` 中六处 `script-path` 改为 `telaidian.js`。
 
 ## 获取你自己的登录态
 

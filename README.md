@@ -21,7 +21,17 @@
 - [`loon/telaidian.js`](loon/telaidian.js)：可直接使用的完整脚本，已包含加密依赖。
 - [`loon/README.md`](loon/README.md)：安装、获取登录态、使用和验证范围。
 
-本地安装：先将完整脚本导入 Loon 本地脚本库并保持名称 `telaidian.js`，再导入插件配置。安装后先执行“特来电状态检查”，确认能够查询自己的活动信息。
+## 导入 Loon
+
+在 Loon 的插件页面添加以下订阅地址，插件会自动下载完整脚本：
+
+```text
+https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.plugin
+```
+
+[打开特来电插件配置](https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.plugin)
+
+导入后打开特来电小程序的“打卡领好礼”获取登录态，再执行“特来电状态检查”。详细步骤见[安装与使用说明](loon/README.md)。
 
 ## 验证状态
 

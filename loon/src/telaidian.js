@@ -4,6 +4,11 @@ var TeldLoon = (function () {
   var KEY = "telaidian.loon.session.v1";
   var ATTEMPT = "telaidian.loon.attempt.v1";
   var LOCK = "telaidian.loon.lock.v1";
+  var CATALOG = "telaidian.loon.catalog.v1";
+  var PLAN = "telaidian.loon.switch-plan.v1";
+  var SWITCH_ATTEMPT = "telaidian.loon.switch-attempt.v1";
+  var CHOICE = "teld_reward_choice";
+  var CONFIRM = "teld_switch_confirmation";
   var API = "https://sgi.teld.cn/api/invoke?SID=";
   var AES_KEY = "7fb498553e3c462988c3b9573692bd5f";
   var AES_IV = "98d71fe589499967";
@@ -167,6 +172,8 @@ var TeldLoon = (function () {
     merged.userAgent = header(request.headers, "User-Agent") || merged.userAgent || "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 Mobile/15E148";
     var origin = /https:\/\/c2\.teld\.(?:cn|cc)/i.exec(isPage ? request.url : header(request.headers, "Referer"));
     merged.origin = origin ? origin[0] : (merged.origin || "https://c2.teld.cn");
+    var city = query.selectedCityCode || query.cityCode || cookies.ta_cityCode;
+    if (/^\d{2,12}$/.test(city || "")) merged.cityCode = city;
     merged.version = 1;
     merged.capturedAt = Date.now();
     var changed = existing.refreshToken !== merged.refreshToken || !sessionId(existing);
@@ -235,6 +242,8 @@ var TeldLoon = (function () {
       kind: data.ChallengeStatus === 1 ? "active" : "inactive", day: day,
       id: data.ChallengeID, status: data.CompleteDailyTask, days: data.ContinuousDays, tasks: null,
       challengeStatus: data.ChallengeStatus, targetDays: data.TargetDays,
+      activityId: data.ActivityId == null ? "" : String(data.ActivityId),
+      rewardType: data.RewardInfo && data.RewardInfo.RewardType,
       rewardName: data.RewardInfo && typeof data.RewardInfo.RewardName === "string"
         ? data.RewardInfo.RewardName.trim().slice(0, 120) : "",
     };
@@ -264,6 +273,112 @@ var TeldLoon = (function () {
       "\n挑战状态：" + (statuses[state.challengeStatus] || "未知") +
       "；今日：" + (state.status === 2 ? "已完成" : state.status === 1 ? "未完成" : "未知");
   }
+  function giftText(gift) {
+    return gift.name + "（" + gift.days + " 天" + (gift.city ? "，" + gift.city : "") + "）";
+  }
+  function reason(gift) {
+    if (gift.type === 1) return "优先考虑：充电券贴近日常充电用途，同类再优先较短挑战；需核对门槛、有效期和适用场站。";
+    if (gift.type === 2 || gift.type === 3) return "次选：折扣权益需实际充电才能体现收益，应核对折扣范围、有效期及适用场站。";
+    if (gift.type === 4) return "低于普通充电券：会员/黑钻权益应先核对资格、有效期与是否涉及额外开通。";
+    return "当前偏好下靠后：实物与日常充电用途较远，还需核对库存、领取、收货与邮寄条件。";
+  }
+  function normalizeGifts(data) {
+    if (!Array.isArray(data)) fail("catalog_failed");
+    var result = data.map(function (item) {
+      if (!item || typeof item !== "object") return null;
+      return {
+        id: item.ActivityId == null ? "" : String(item.ActivityId).trim(),
+        name: typeof item.RewardName === "string" ? item.RewardName.trim().slice(0, 120) : "",
+        days: Number(item.TargetDays), type: Number(item.RewardType),
+        city: typeof item.CityName === "string" ? item.CityName.trim().slice(0, 60) : "",
+      };
+    }).filter(function (gift) {
+      return gift && gift.id && gift.id.length <= 128 && gift.name && Number.isInteger(gift.days) && gift.days > 0 && [1, 2, 3, 4, 5].indexOf(gift.type) >= 0;
+    });
+    var tier = { 1: 0, 2: 1, 3: 1, 4: 2, 5: 3 };
+    return result.sort(function (a, b) {
+      return tier[a.type] - tier[b.type] || a.days - b.days || a.id.localeCompare(b.id);
+    });
+  }
+  async function catalog(session) {
+    var result = await http("ProSrv-GetCheckInActivityList", "request", JSON.stringify({ CityCode: session.cityCode || "" }), session);
+    if (String(result.state) !== "1") fail("catalog_failed");
+    return normalizeGifts(result.data);
+  }
+  function ownerHash(session) { return sha(sessionId(session)); }
+  function challengeStamp(state) {
+    return sha(JSON.stringify([state.id, state.activityId, state.challengeStatus, state.days, state.status, state.rewardName, state.rewardType, state.targetDays]));
+  }
+  function assertScope(session, owner) {
+    if (sessionId(read(KEY) || {}) !== sessionId(session)) fail("account_changed");
+    if ((read(LOCK) || {}).owner !== owner) fail("unknown_state");
+  }
+  function assertSwitchable(state) {
+    if (!state.id || state.challengeStatus !== 1 || !state.rewardName || !Number.isInteger(state.days) || state.days < 0 ||
+        !Number.isInteger(Number(state.targetDays)) || Number(state.targetDays) <= 0 ||
+        [1, 2, 3, 4, 5].indexOf(Number(state.rewardType)) < 0) fail("switch_inactive");
+  }
+  async function giftActions(mode, session, state, owner) {
+    if (mode === "gifts") {
+      var gifts = await catalog(session);
+      if (!gifts.length) fail("catalog_empty");
+      assertScope(session, owner);
+      save({ owner: ownerHash(session), createdAt: Date.now(), gifts: gifts }, CATALOG);
+      var lines = gifts.map(function (gift, i) { return (i + 1) + ". " + giftText(gift) + "\n理由：" + reason(gift); });
+      console.log("[特来电] 当前账号可比较奖品列表\n" + lines.join("\n\n"));
+      return notify("奖品推荐：省事实用优先", describe(state) + "\n\n" + lines.slice(0, 3).join("\n") +
+        "\n共 " + gifts.length + " 项，完整编号见本次脚本日志。后续任务与券使用条件未核实，不代表全程无额外要求。" +
+        (Number(state.days) > 0 ? "\n你已坚持 " + state.days + " 天，更换会清零；没有充分收益依据时建议先保留当前挑战。" : ""));
+    }
+    assertSwitchable(state);
+    var attempt = sha(ownerHash(session) + ":" + state.id);
+    if ((read(SWITCH_ATTEMPT) || {}).key === attempt) fail("switch_already_attempted");
+    if (mode === "switch-preview") {
+      var saved = read(CATALOG), choice = String($persistentStore.read(CHOICE) || "").trim();
+      if (!saved || saved.owner !== ownerHash(session) || Date.now() - saved.createdAt > 900000) fail("catalog_stale");
+      if (!/^[1-9]\d*$/.test(choice) || !saved.gifts[Number(choice) - 1]) fail("choice_required");
+      var selected = saved.gifts[Number(choice) - 1];
+      var candidates = await catalog(session);
+      var matches = candidates.filter(function (gift) { return gift.id === selected.id; });
+      if (matches.length !== 1 || JSON.stringify(matches[0]) !== JSON.stringify(selected)) fail("plan_stale");
+      if (state.activityId === selected.id || (state.rewardName === selected.name && Number(state.targetDays) === selected.days && Number(state.rewardType) === selected.type)) fail("same_reward");
+      var ambiguous = candidates.filter(function (gift) { return gift.name === selected.name && gift.days === selected.days && gift.type === selected.type; }).length > 1;
+      if (ambiguous && !state.activityId) fail("target_ambiguous");
+      var pending = {
+        owner: ownerHash(session), source: challengeStamp(state), target: selected,
+        choice: choice, catalog: sha(JSON.stringify(saved.gifts)), requireActivityId: ambiguous,
+        expiresAt: Date.now() + 600000,
+        code: "清零并更换-" + sha(owner + selected.id + Math.random()).slice(0, 8).toUpperCase(),
+      };
+      assertScope(session, owner);
+      save(pending, PLAN);
+      $persistentStore.write(null, CONFIRM);
+      return notify("切换预览：尚未提交", describe(state) + "\n目标奖品：" + giftText(selected) +
+        "\n更换将放弃当前挑战，清零现有 " + state.days + " 天进度并重新开始。券门槛、后续任务和领取条件请先在官方页面核对。" +
+        "\n如确认，在插件参数 teld_switch_confirmation 填入：" + pending.code +
+        "\n10分钟内手动运行“特来电确认切换”；账号或挑战变化将使本次预览失效。");
+    }
+    var plan = read(PLAN), confirmation = String($persistentStore.read(CONFIRM) || "").trim();
+    if (!plan || !confirmation || confirmation !== plan.code) fail("confirmation_required");
+    var cachedCatalog = read(CATALOG);
+    if (plan.owner !== ownerHash(session) || plan.expiresAt <= Date.now() || plan.source !== challengeStamp(state) ||
+        String($persistentStore.read(CHOICE) || "").trim() !== plan.choice || !cachedCatalog ||
+        cachedCatalog.owner !== plan.owner || sha(JSON.stringify(cachedCatalog.gifts)) !== plan.catalog) fail("plan_stale");
+    var fresh = await catalog(session);
+    var target = fresh.filter(function (gift) { return gift.id === plan.target.id; });
+    if (target.length !== 1 || JSON.stringify(target[0]) !== JSON.stringify(plan.target)) fail("plan_stale");
+    assertScope(session, owner);
+    save({ key: attempt, at: Date.now() }, SWITCH_ATTEMPT);
+    if (!$persistentStore.write(null, PLAN) || !$persistentStore.write(null, CONFIRM)) fail("storage_failed");
+    // The official change dialog uses uppercase ChangeActivityID; no separate give-up/start calls.
+    var changed = await http("ProSrv-GiveUpCheckInChallenge", "request", JSON.stringify({ ChangeActivityID: plan.target.id }), session);
+    var after = await snapshot(session, false);
+    var exactTarget = (!after.activityId || after.activityId === plan.target.id) && (!plan.requireActivityId || after.activityId === plan.target.id) &&
+      after.rewardName === plan.target.name && Number(after.targetDays) === plan.target.days && Number(after.rewardType) === plan.target.type;
+    if (String(changed.state) !== "1" || !changed.data || changed.data.IsSuccess !== true ||
+        !after.id || after.id === state.id || after.challengeStatus !== 1 || !exactTarget) fail("switch_unverified");
+    notify("奖品切换已核对", describe(after) + "\n已核对新挑战与目标奖品。本次没有提交每日打卡。");
+  }
   async function run(mode) {
     var session = read(KEY);
     if (!session) fail("login_required");
@@ -273,7 +388,8 @@ var TeldLoon = (function () {
     save({ owner: owner, until: Date.now() + 120000 }, LOCK);
     try {
       await ensureAccess(session);
-      var state = await snapshot(session, mode !== "reward"), action = decide(state);
+      var state = await snapshot(session, mode === "run" || mode === "status"), action = decide(state);
+      if (["gifts", "switch-preview", "switch-confirm"].indexOf(mode) >= 0) return await giftActions(mode, session, state, owner);
       if (mode === "reward") return notify(state.id ? "当前打卡奖品" : "尚无当前挑战", describe(state));
       if (action === "inactive") return notify("需要手动查看", describe(state) + "\n当前没有进行中的挑战，或挑战已经结束。");
       if (action === "done") return notify("今日已完成", describe(state));
@@ -302,6 +418,17 @@ var TeldLoon = (function () {
       login_required: "请开启获取登录态规则，重新打开小程序的打卡领好礼；也可使用 Safari 登录活动页。",
       storage_failed: "Loon 本地存储失败，本次未继续操作。",
       account_changed: "运行时检测到账号已切换，已停止；请重新运行状态检查。",
+      catalog_failed: "候选奖品查询失败或格式变化，请重新获取登录态或查看官方活动页。",
+      catalog_empty: "当前没有字段完整的可比较奖品，请查看官方活动页。",
+      catalog_stale: "请先运行“特来电奖品推荐”，获取当前账号的新列表和编号。",
+      choice_required: "请在插件参数 teld_reward_choice 填入推荐列表里的目标编号，再运行切换预览。",
+      switch_inactive: "仅允许更换进行中的挑战，且必须能确认当前奖品和已打卡天数；请查看官方活动页。",
+      same_reward: "目标与当前奖品相同或显示信息无法区分，已停止，避免清零进度。",
+      target_ambiguous: "候选中存在同名同天数奖品，当前接口又无法提供活动标识，不能可靠核对具体目标；请在官方页面切换。",
+      confirmation_required: "尚未确认清零。请先运行切换预览，将通知中的完整确认码填入 teld_switch_confirmation。",
+      plan_stale: "账号、挑战、进度、目标奖品或预览有效期发生变化，请重新预览并确认。",
+      switch_already_attempted: "当前挑战已经尝试过切换，不重复提交；请在官方活动页核对结果。",
+      switch_unverified: "未能确认切换到目标奖品，不自动重试；请立即在官方活动页核对当前挑战。",
       runtime_old: "当前 JavaScript 运行时不支持 BigInt，请更新 iOS 和 Loon。",
       network_failed: "请求未完成；若已发出打卡请求，请先在活动页核对，本日不自动重试。",
       http_failed: "服务器 HTTP 返回异常，请检查网络或在活动页核对。",
@@ -320,9 +447,9 @@ var TeldLoon = (function () {
       else {
         var mode = parseForm(typeof $argument === "string" ? $argument : "").mode || "status";
         if (mode === "clear") {
-          [KEY, ATTEMPT, LOCK].forEach(function (key) { if (!$persistentStore.write(null, key)) fail("storage_failed"); });
+          [KEY, ATTEMPT, LOCK, CATALOG, PLAN, SWITCH_ATTEMPT, CHOICE, CONFIRM].forEach(function (key) { if (!$persistentStore.write(null, key)) fail("storage_failed"); });
           notify("已清除本插件登录态", "关闭获取规则后将不再保存新的登录态。");
-        } else if (mode === "status" || mode === "run" || mode === "reward") await run(mode);
+        } else if (["status", "run", "reward", "gifts", "switch-preview", "switch-confirm"].indexOf(mode) >= 0) await run(mode);
         else fail("unknown_state");
       }
     } catch (error) { reportError(error); }

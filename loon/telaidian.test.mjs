@@ -14,7 +14,7 @@ const sessionKey = "telaidian.loon.session.v1";
 const attemptKey = "telaidian.loon.attempt.v1";
 const baseSession = { version: 1, accessToken: access, refreshToken: refresh, clientIp: "192.0.2.1", userAgent: "fixture-agent", origin: "https://c2.teld.cc" };
 const success = (data) => ({ state: "1", errcode: null, data });
-const status = (extra = {}) => success({ ChallengeID: "fixture-challenge", ChallengeStatus: 1, CompleteDailyTask: 1, ContinuousDays: 8, TargetDays: 30, RewardInfo: { RewardName: "测试充电券" }, ...extra });
+const status = (extra = {}) => success({ ChallengeID: "fixture-challenge", ChallengeStatus: 1, CompleteDailyTask: 1, ContinuousDays: 8, TargetDays: 30, RewardInfo: { RewardName: "测试充电券", RewardType: 1 }, ...extra });
 const tasks = (list = []) => success({ DailyTasks: list });
 
 function setup(store = new Map()) {
@@ -201,6 +201,101 @@ assert(!result.store.has(attemptKey));
 result = await execute({ queue: [status(), tasks(), success({ IsCheckInSuccess: true }), status({ ChallengeID: "different-challenge", CompleteDailyTask: 2 }), tasks()] });
 assert(!result.notifications.some((n) => n[1] === "打卡成功"));
 
+const catalogKey = "telaidian.loon.catalog.v1";
+const planKey = "telaidian.loon.switch-plan.v1";
+const switchAttemptKey = "telaidian.loon.switch-attempt.v1";
+const choiceKey = "teld_reward_choice";
+const confirmationKey = "teld_switch_confirmation";
+const giftRows = [
+  { ActivityId: "physical", RewardName: "测试实物", RewardType: 5, TargetDays: 1 },
+  { ActivityId: "discount", RewardName: "测试折扣", RewardType: 2, TargetDays: 3 },
+  { ActivityId: "coupon-long", RewardName: "测试长周期券", RewardType: 1, TargetDays: 30 },
+  { ActivityId: "coupon-short", RewardName: "测试短周期券", RewardType: 1, TargetDays: 7 },
+  { ActivityId: "current", RewardName: "测试充电券", RewardType: 1, TargetDays: 30 },
+];
+const list = () => success(giftRows);
+const afterSwitch = () => status({ ChallengeID: "new-challenge", ActivityId: "coupon-short", ContinuousDays: 0, TargetDays: 7, RewardInfo: { RewardName: "测试短周期券", RewardType: 1 } });
+const isSwitch = (options) => sid(options) === "ProSrv-GiveUpCheckInChallenge";
+async function preview(store = authenticated()) {
+  const listed = await execute({ store, mode: "gifts", queue: [status(), list()] });
+  const sorted = JSON.parse(store.get(catalogKey)).gifts;
+  assert.equal(sorted[0].id, "coupon-short");
+  assert.equal(sorted.at(-1).id, "physical");
+  assert(!listed.requests.some(isSwitch));
+  assert(listed.notifications.some((n) => n[2].includes("门槛") && n[2].includes("清零")));
+  store.set(choiceKey, "1");
+  const planned = await execute({ store, mode: "switch-preview", queue: [status(), list()] });
+  assert(!planned.requests.some(isSwitch));
+  const plan = JSON.parse(store.get(planKey));
+  assert(plan.code.startsWith("清零并更换-"));
+  assert(planned.notifications.some((n) => n[2].includes("清零现有 8 天") && n[2].includes(plan.code)));
+  return { store, plan };
+}
+
+let prepared = await preview();
+prepared.store.set(confirmationKey, prepared.plan.code);
+result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status(), list(),
+  (options) => {
+    assert.equal(sid(options), "ProSrv-GiveUpCheckInChallenge");
+    assert.deepEqual(JSON.parse(params(options).request), { ChangeActivityID: "coupon-short" });
+    return success({ IsSuccess: true });
+  }, afterSwitch(),
+] });
+assert.equal(result.requests.filter(isSwitch).length, 1);
+assert(!result.requests.some((r) => sid(r) === "ProSrv-CompleteCheckInTask"));
+assert(result.notifications.some((n) => n[1] === "奖品切换已核对"));
+assert(!prepared.store.has(planKey) && !prepared.store.has(confirmationKey));
+assert(prepared.store.has(switchAttemptKey));
+
+result = await execute({ mode: "switch-confirm", queue: [status()] });
+assert(!result.requests.some(isSwitch), "no confirmation must never change the challenge");
+for (const mutation of [
+  ({ store }) => store.set(confirmationKey, "wrong-code"),
+  ({ store }) => store.set(choiceKey, "2"),
+  ({ store, plan }) => store.set(planKey, JSON.stringify({ ...plan, expiresAt: NOW - 1 })),
+  ({ store }) => store.set(sessionKey, JSON.stringify({ ...baseSession, accessToken: accountB, refreshToken: "" })),
+  ({ store }) => store.set(catalogKey, JSON.stringify({ ...JSON.parse(store.get(catalogKey)), gifts: [] })),
+]) {
+  prepared = await preview();
+  prepared.store.set(confirmationKey, prepared.plan.code);
+  mutation(prepared);
+  result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status()] });
+  assert(!result.requests.some(isSwitch));
+}
+prepared = await preview(); prepared.store.set(confirmationKey, prepared.plan.code);
+result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status({ ContinuousDays: 9 })] });
+assert(!result.requests.some(isSwitch), "additional progress must invalidate the clearing confirmation");
+
+prepared = await preview(); prepared.store.set(confirmationKey, prepared.plan.code);
+result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status(), success(giftRows.map((g) => g.ActivityId === "coupon-short" ? { ...g, TargetDays: 99 } : g))] });
+assert(!result.requests.some(isSwitch), "changed target conditions must invalidate preview");
+
+prepared = await preview(); prepared.store.set(confirmationKey, prepared.plan.code);
+result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status(), list(), { transportError: "uncertain-switch-error" }] });
+assert(!result.notifications.some((n) => JSON.stringify(n).includes("uncertain-switch-error")));
+assert(!prepared.store.has(planKey));
+result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status()] });
+assert(!result.requests.some(isSwitch), "never replay an uncertain switch");
+
+prepared = await preview(); prepared.store.set(confirmationKey, prepared.plan.code);
+result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status(), list(), success({ IsSuccess: true }), status({ ChallengeID: "another-challenge" })] });
+assert(!result.notifications.some((n) => n[1] === "奖品切换已核对"), "success flag alone must not verify the wrong reward");
+
+result = await execute({ mode: "switch-preview", queue: [status({ ChallengeStatus: 2 })] });
+assert(!result.requests.some(isSwitch));
+result = await execute({ mode: "gifts", queue: [status(), { state: "0", errcode: "fixture-error" }] });
+assert(!result.requests.some(isSwitch));
+
+result = await execute({ mode: "switch-preview", queue: [status()] });
+assert(!result.store.has(planKey), "switch preview requires a prior account-bound catalog");
+const ambiguousRows = [...giftRows, { ...giftRows[3], ActivityId: "coupon-short-copy", CityName: "另一个测试城市" }];
+const ambiguousStore = authenticated();
+await execute({ store: ambiguousStore, mode: "gifts", queue: [status(), success(ambiguousRows)] });
+ambiguousStore.set(choiceKey, "1");
+result = await execute({ store: ambiguousStore, mode: "switch-preview", queue: [status(), success(ambiguousRows)] });
+assert(!result.store.has(planKey));
+assert(result.notifications.some((n) => n[2].includes("同名同天数")));
+
 result = await execute({ store: new Map([[sessionKey, JSON.stringify(baseSession)], ["unrelated-plugin", "keep"]]), mode: "clear" });
 assert(!result.store.has(sessionKey));
 assert.equal(result.store.get("unrelated-plugin"), "keep");
@@ -213,4 +308,8 @@ for (const line of plugin.split(/\r?\n/).filter((l) => l.startsWith("http-reques
 }
 assert(plugin.includes('cron "0 9 * * *"'));
 assert(plugin.includes('tag=特来电查看奖品,argument="mode=reward"'));
-console.log("PASS: official RSA/AES parity, signatures, p/token capture, renewal, task guards, post-write confirmation, no retries after uncertain writes, local credential isolation and Loon config");
+assert(plugin.includes('tag=特来电预览切换,argument="mode=switch-preview"'));
+assert(plugin.includes('tag=特来电确认切换,argument="mode=switch-confirm"'));
+assert(plugin.includes("#!input = teld_reward_choice"));
+assert(!plugin.split(/\r?\n/).some((line) => line.startsWith("cron ") && /argument="[^"]*mode=switch/.test(line)));
+console.log("PASS: cryptography, capture/renewal, reward detection/ranking, two-step switch, stale/account/progress guards, exact target verification, uncertain-write protection and Loon config");

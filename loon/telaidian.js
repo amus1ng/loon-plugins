@@ -6907,11 +6907,14 @@ var TeldLoon = (function () {
         ? data.RewardInfo.RewardName.trim().slice(0, 120) : "",
     };
     // The final successful check-in can finish the challenge. Retain its confirmation fields.
-    if (data.ChallengeStatus !== 1 || includeTasks === false) return state;
+    if (includeTasks !== false) await loadTasks(session, state);
+    return state;
+  }
+  async function loadTasks(session, state) {
+    if (state.challengeStatus !== 1) return;
     var task = await http("ProSrv-GetCheckInTask", "request", JSON.stringify({ MakeUpDate: "" }), session);
     if (String(task.state) !== "1") fail("query_failed");
     state.tasks = task.data && task.data.DailyTasks;
-    return state;
   }
   function decide(state) {
     if (!state || state.kind !== "active") return "inactive";
@@ -6988,11 +6991,21 @@ var TeldLoon = (function () {
       return notify("奖品推荐：省事实用优先", describe(state) + "\n\n" + lines.slice(0, 3).join("\n") +
         "\n共 " + gifts.length + " 项，完整编号见本次脚本日志。后续任务与券使用条件未核实，不代表全程无额外要求。" +
         (Number(state.days) > 0 ? "\n你已坚持 " + state.days + " 天，更换会清零；没有充分收益依据时建议先保留当前挑战。" : "") +
-        "\n不换无需操作。要换：15分钟内在插件参数 teld_reward_choice 填编号（行首数字，如 3），再运行“特来电换奖品②预览”。");
+        "\n不换无需操作。要换：15分钟内在插件参数 teld_reward_choice 填编号（行首数字，如 3），再运行“特来电换奖品②预览确认”。");
     }
     assertSwitchable(state);
     var attempt = sha(ownerHash(session) + ":" + state.id);
     if ((read(SWITCH_ATTEMPT) || {}).key === attempt) fail("switch_already_attempted");
+    var note = "";
+    if (mode === "switch") {
+      // One entry: only a code matching a live preview of this account submits; anything else re-previews.
+      var typed = String($persistentStore.read(CONFIRM) || "").trim(), live = read(PLAN);
+      if (typed && live && typed === live.code && live.owner === ownerHash(session) && live.expiresAt > Date.now()) mode = "switch-confirm";
+      else {
+        mode = "switch-preview";
+        if (typed) note = "填写的确认码无效或已过期，本次没有更换，已重新预览。\n";
+      }
+    }
     if (mode === "switch-preview") {
       var saved = read(CATALOG), choice = String($persistentStore.read(CHOICE) || "").trim();
       if (!saved || saved.owner !== ownerHash(session) || Date.now() - saved.createdAt > 900000) fail("catalog_stale");
@@ -7013,20 +7026,22 @@ var TeldLoon = (function () {
       assertScope(session, owner);
       save(pending, PLAN);
       $persistentStore.write(null, CONFIRM);
-      return notify("切换预览：尚未提交", describe(state) + "\n目标奖品：" + giftText(selected) +
+      return notify("切换预览：尚未提交", note + describe(state) + "\n目标奖品：" + giftText(selected) +
         "\n更换将放弃当前挑战，清零现有 " + state.days + " 天进度并重新开始。券门槛、后续任务和领取条件请先在官方页面核对。" +
         "\n如确认，在插件参数 teld_switch_confirmation 填入：" + pending.code +
-        "\n10分钟内手动运行“特来电换奖品③确认”；不换则不填、不运行。账号或挑战变化将使本次预览失效。");
+        "\n10分钟内再次运行“特来电换奖品②预览确认”即提交更换；不换则不填。账号或挑战变化将使本次预览失效。");
     }
     var plan = read(PLAN), confirmation = String($persistentStore.read(CONFIRM) || "").trim();
     if (!plan || !confirmation || confirmation !== plan.code) fail("confirmation_required");
+    // A stale plan can never be confirmed; drop it so the next run starts a fresh preview.
+    function stale() { $persistentStore.write(null, PLAN); fail("plan_stale"); }
     var cachedCatalog = read(CATALOG);
     if (plan.owner !== ownerHash(session) || plan.expiresAt <= Date.now() || plan.source !== challengeStamp(state) ||
         String($persistentStore.read(CHOICE) || "").trim() !== plan.choice || !cachedCatalog ||
-        cachedCatalog.owner !== plan.owner || sha(JSON.stringify(cachedCatalog.gifts)) !== plan.catalog) fail("plan_stale");
+        cachedCatalog.owner !== plan.owner || sha(JSON.stringify(cachedCatalog.gifts)) !== plan.catalog) stale();
     var fresh = await catalog(session);
     var target = fresh.filter(function (gift) { return gift.id === plan.target.id; });
-    if (target.length !== 1 || JSON.stringify(target[0]) !== JSON.stringify(plan.target)) fail("plan_stale");
+    if (target.length !== 1 || JSON.stringify(target[0]) !== JSON.stringify(plan.target)) stale();
     assertScope(session, owner);
     save({ key: attempt, at: Date.now() }, SWITCH_ATTEMPT);
     if (!$persistentStore.write(null, PLAN) || !$persistentStore.write(null, CONFIRM)) fail("storage_failed");
@@ -7048,12 +7063,23 @@ var TeldLoon = (function () {
     save({ owner: owner, until: Date.now() + 120000 }, LOCK);
     try {
       await ensureAccess(session);
-      var state = await snapshot(session, mode === "run" || mode === "status"), action = decide(state);
-      if (["gifts", "switch-preview", "switch-confirm"].indexOf(mode) >= 0) return await giftActions(mode, session, state, owner);
+      var state = await snapshot(session, false);
+      if (mode === "run" || mode === "status") {
+        // Status always shows the selected reward, even when the task query fails.
+        try { await loadTasks(session, state); } catch (error) {
+          if (mode === "status") return notify("需要手动处理", describe(state) + "\n" + explain(error));
+          throw error;
+        }
+      }
+      var action = decide(state);
+      if (["gifts", "switch", "switch-preview", "switch-confirm"].indexOf(mode) >= 0) return await giftActions(mode, session, state, owner);
       if (mode === "reward") return notify(state.id ? "当前打卡奖品" : "尚无当前挑战", describe(state));
       if (action === "inactive") return notify("需要手动查看", describe(state) + "\n当前没有进行中的挑战，或挑战已经结束。");
       if (action === "done") return notify("今日已完成", describe(state));
-      if (action === "unknown") fail("unknown_state");
+      if (action === "unknown") {
+        if (mode === "status") return notify("需要手动处理", describe(state) + "\n" + explain(new Error("unknown_state")));
+        fail("unknown_state");
+      }
       if (action === "manual") {
         var names = state.tasks.map(function (task) { return TASKS[task.TaskType] || "未知任务"; });
         return notify("今日有任务，已跳过", describe(state) + "\n今日任务：" + names.join("、") + "。请在特来电手动处理。");
@@ -7073,33 +7099,34 @@ var TeldLoon = (function () {
       if ((read(LOCK) || {}).owner === owner) $persistentStore.write(null, LOCK);
     }
   }
-  function reportError(error) {
-    var messages = {
-      login_required: "请开启获取登录态规则，重新打开小程序的打卡领好礼；也可使用 Safari 登录活动页。",
-      storage_failed: "Loon 本地存储失败，本次未继续操作。",
-      account_changed: "运行时检测到账号已切换，已停止；请重新运行状态检查。",
-      catalog_failed: "候选奖品查询失败或格式变化，请重新获取登录态或查看官方活动页。",
-      catalog_empty: "当前没有字段完整的可比较奖品，请查看官方活动页。",
-      catalog_stale: "推荐列表不存在、属于其他账号或已超过15分钟。请先运行“特来电换奖品①推荐”，获取当前账号的新列表和编号。",
-      choice_required: "请在插件参数 teld_reward_choice 填入推荐日志里的编号（行首数字，如 3），再运行“特来电换奖品②预览”。",
-      switch_inactive: "仅允许更换进行中的挑战，且必须能确认当前奖品和已打卡天数；请查看官方活动页。",
-      same_reward: "目标与当前奖品相同或显示信息无法区分，已停止，避免清零进度。",
-      target_ambiguous: "候选中存在同名同天数奖品，当前接口又无法提供活动标识，不能可靠核对具体目标；请在官方页面切换。",
-      confirmation_required: "尚未确认清零，本次没有提交切换。顺序是：①推荐 → 填编号 → ②预览 → 把预览通知里的完整确认码（清零并更换-…）填入 teld_switch_confirmation → 10分钟内运行③确认。",
-      plan_stale: "账号、挑战、进度、目标奖品或预览有效期发生变化，请重新预览并确认。",
-      switch_already_attempted: "当前挑战已经尝试过切换，不重复提交；请在官方活动页核对结果。",
-      switch_unverified: "未能确认切换到目标奖品，不自动重试；请立即在官方活动页核对当前挑战。",
-      runtime_old: "当前 JavaScript 运行时不支持 BigInt，请更新 iOS 和 Loon。",
-      network_failed: "请求未完成；若已发出打卡请求，请先在活动页核对，本日不自动重试。",
-      http_failed: "服务器 HTTP 返回异常，请检查网络或在活动页核对。",
-      response_unknown: "接口响应格式变化或无法解码，已停止操作。",
-      query_failed: "活动状态查询失败，可能登录过期或服务端有限制，请重新打开活动页。",
-      unknown_state: "打卡状态或任务信息不完整，已跳过。",
-      verification_failed: "未能确认今日打卡完成，请在活动页查看；本日不自动重试。",
-    };
-    // Never log raw exceptions, HTTP bodies, cookies or token-bearing URLs.
-    notify("需要手动处理", messages[error && error.message] || "运行未完成，请检查 Loon 配置或重新获取登录态。");
+  var MESSAGES = {
+    login_required: "请开启获取登录态规则，重新打开小程序的打卡领好礼；也可使用 Safari 登录活动页。",
+    storage_failed: "Loon 本地存储失败，本次未继续操作。",
+    account_changed: "运行时检测到账号已切换，已停止；请重新运行状态检查。",
+    catalog_failed: "候选奖品查询失败或格式变化，请重新获取登录态或查看官方活动页。",
+    catalog_empty: "当前没有字段完整的可比较奖品，请查看官方活动页。",
+    catalog_stale: "推荐列表不存在、属于其他账号或已超过15分钟。请先运行“特来电换奖品①推荐”，获取当前账号的新列表和编号。",
+    choice_required: "请在插件参数 teld_reward_choice 填入推荐日志里的编号（行首数字，如 3），再运行“特来电换奖品②预览确认”。",
+    switch_inactive: "仅允许更换进行中的挑战，且必须能确认当前奖品和已打卡天数；请查看官方活动页。",
+    same_reward: "目标与当前奖品相同或显示信息无法区分，已停止，避免清零进度。",
+    target_ambiguous: "候选中存在同名同天数奖品，当前接口又无法提供活动标识，不能可靠核对具体目标；请在官方页面切换。",
+    confirmation_required: "尚未确认清零，本次没有提交切换。请运行“特来电换奖品②预览确认”，把预览通知里的完整确认码（清零并更换-…）填入 teld_switch_confirmation，10分钟内再运行一次②。",
+    plan_stale: "账号、挑战、进度、目标奖品或预览有效期发生变化，本次没有更换。请重新运行“特来电换奖品②预览确认”生成新预览；仍提示时从①推荐开始。",
+    switch_already_attempted: "当前挑战已经尝试过切换，不重复提交；请在官方活动页核对结果。",
+    switch_unverified: "未能确认切换到目标奖品，不自动重试；请立即在官方活动页核对当前挑战。",
+    runtime_old: "当前 JavaScript 运行时不支持 BigInt，请更新 iOS 和 Loon。",
+    network_failed: "请求未完成；若已发出打卡请求，请先在活动页核对，本日不自动重试。",
+    http_failed: "服务器 HTTP 返回异常，请检查网络或在活动页核对。",
+    response_unknown: "接口响应格式变化或无法解码，已停止操作。",
+    query_failed: "活动状态查询失败，可能登录过期或服务端有限制，请重新打开活动页。",
+    unknown_state: "打卡状态或任务信息不完整，已跳过。",
+    verification_failed: "未能确认今日打卡完成，请在活动页查看；本日不自动重试。",
+  };
+  function explain(error) {
+    return MESSAGES[error && error.message] || "运行未完成，请检查 Loon 配置或重新获取登录态。";
   }
+  // Never log raw exceptions, HTTP bodies, cookies or token-bearing URLs.
+  function reportError(error) { notify("需要手动处理", explain(error)); }
   async function main() {
     var intercepted = typeof $request !== "undefined";
     try {
@@ -7109,7 +7136,7 @@ var TeldLoon = (function () {
         if (mode === "clear") {
           [KEY, ATTEMPT, LOCK, CATALOG, PLAN, SWITCH_ATTEMPT, CHOICE, CONFIRM].forEach(function (key) { if (!$persistentStore.write(null, key)) fail("storage_failed"); });
           notify("已清除本插件登录态", "关闭获取规则后将不再保存新的登录态。");
-        } else if (["status", "run", "reward", "gifts", "switch-preview", "switch-confirm"].indexOf(mode) >= 0) await run(mode);
+        } else if (["status", "run", "reward", "gifts", "switch", "switch-preview", "switch-confirm"].indexOf(mode) >= 0) await run(mode);
         else fail("unknown_state");
       }
     } catch (error) { reportError(error); }

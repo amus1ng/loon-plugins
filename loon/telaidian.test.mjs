@@ -281,6 +281,37 @@ prepared = await preview(); prepared.store.set(confirmationKey, prepared.plan.co
 result = await execute({ store: prepared.store, mode: "switch-confirm", queue: [status(), list(), success({ IsSuccess: true }), status({ ChallengeID: "another-challenge" })] });
 assert(!result.notifications.some((n) => n[1] === "奖品切换已核对"), "success flag alone must not verify the wrong reward");
 
+// Merged entry: empty code previews; only a matching live code submits; anything else re-previews.
+prepared = await preview();
+result = await execute({ store: prepared.store, mode: "switch", queue: [status(), list()] });
+assert(!result.requests.some(isSwitch), "merged entry without a code only previews");
+const merged = JSON.parse(prepared.store.get(planKey));
+prepared.store.set(confirmationKey, "清零并更换-WRONG");
+result = await execute({ store: prepared.store, mode: "switch", queue: [status(), list()] });
+assert(!result.requests.some(isSwitch), "a wrong code must not submit");
+assert(result.notifications.some((n) => n[2].includes("确认码无效或已过期")));
+const renewed = JSON.parse(prepared.store.get(planKey));
+assert.notEqual(renewed.code, "清零并更换-WRONG");
+prepared.store.set(confirmationKey, merged.code);
+prepared.store.set(planKey, JSON.stringify({ ...renewed, code: merged.code, expiresAt: NOW - 1 }));
+result = await execute({ store: prepared.store, mode: "switch", queue: [status(), list()] });
+assert(!result.requests.some(isSwitch), "an expired code must not submit");
+prepared.store.set(confirmationKey, JSON.parse(prepared.store.get(planKey)).code);
+result = await execute({ store: prepared.store, mode: "switch", queue: [status({ ContinuousDays: 9 })] });
+assert(!result.requests.some(isSwitch), "progress change must block the merged confirm");
+assert(!prepared.store.has(planKey), "a stale plan is dropped so the next run re-previews");
+prepared = await preview(); prepared.store.set(confirmationKey, prepared.plan.code);
+result = await execute({ store: prepared.store, mode: "switch", queue: [status(), list(), success({ IsSuccess: true }), afterSwitch()] });
+assert.equal(result.requests.filter(isSwitch).length, 1);
+assert(result.notifications.some((n) => n[1] === "奖品切换已核对"));
+result = await execute({ store: prepared.store, mode: "switch", queue: [afterSwitch(), list()] });
+assert(!result.requests.some(isSwitch), "a used code never submits twice");
+
+result = await execute({ mode: "status", queue: [status(), { state: "0", errcode: "fixture-error" }] });
+assert(result.notifications.some((n) => n[2].includes("当前奖品：测试充电券") && n[2].includes("活动状态查询失败")), "status shows the reward even if tasks fail");
+result = await execute({ mode: "status", queue: [status(), success({})] });
+assert(result.notifications.some((n) => n[2].includes("当前奖品：测试充电券") && n[2].includes("不完整")));
+
 result = await execute({ mode: "switch-preview", queue: [status({ ChallengeStatus: 2 })] });
 assert(!result.requests.some(isSwitch));
 result = await execute({ mode: "gifts", queue: [status(), { state: "0", errcode: "fixture-error" }] });
@@ -307,11 +338,11 @@ for (const line of plugin.split(/\r?\n/).filter((l) => l.startsWith("http-reques
   assert(!regex.test("https://unrelated.example/"));
 }
 assert(plugin.includes('cron "0 9 * * *"'));
-assert(plugin.includes('tag=特来电查看奖品,argument="mode=reward"'));
 assert(plugin.includes('tag=特来电换奖品①推荐,argument="mode=gifts"'));
+assert(plugin.includes('tag=特来电换奖品②预览确认,argument="mode=switch"'));
+assert(plugin.includes('tag=特来电状态检查,argument="mode=status"'));
+assert.equal(plugin.split(/\r?\n/).filter((line) => line.startsWith("generic ")).length, 5);
 assert(new Set(plugin.match(/\?v=[\w-]+/g)).size === 1, "all script URLs share one cache version");
-assert(plugin.includes('tag=特来电换奖品②预览,argument="mode=switch-preview"'));
-assert(plugin.includes('tag=特来电换奖品③确认,argument="mode=switch-confirm"'));
 assert(plugin.includes("#!input = teld_reward_choice"));
 assert(!plugin.split(/\r?\n/).some((line) => line.startsWith("cron ") && /argument="[^"]*mode=switch/.test(line)));
 console.log("PASS: cryptography, capture/renewal, reward detection/ranking, two-step switch, stale/account/progress guards, exact target verification, uncertain-write protection and Loon config");

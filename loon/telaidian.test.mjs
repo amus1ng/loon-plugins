@@ -308,8 +308,10 @@ for (const line of plugin.split(/\r?\n/).filter((l) => l.startsWith("http-reques
 }
 assert(plugin.includes('cron "0 9 * * *"'));
 assert(plugin.includes('tag=特来电查看奖品,argument="mode=reward"'));
-assert(plugin.includes('tag=特来电预览切换,argument="mode=switch-preview"'));
-assert(plugin.includes('tag=特来电确认切换,argument="mode=switch-confirm"'));
+assert(plugin.includes('tag=特来电换奖品①推荐,argument="mode=gifts"'));
+assert(new Set(plugin.match(/\?v=[\w-]+/g)).size === 1, "all script URLs share one cache version");
+assert(plugin.includes('tag=特来电换奖品②预览,argument="mode=switch-preview"'));
+assert(plugin.includes('tag=特来电换奖品③确认,argument="mode=switch-confirm"'));
 assert(plugin.includes("#!input = teld_reward_choice"));
 assert(!plugin.split(/\r?\n/).some((line) => line.startsWith("cron ") && /argument="[^"]*mode=switch/.test(line)));
 console.log("PASS: cryptography, capture/renewal, reward detection/ranking, two-step switch, stale/account/progress guards, exact target verification, uncertain-write protection and Loon config");

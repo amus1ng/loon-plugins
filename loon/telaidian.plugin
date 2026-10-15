@@ -1,5 +1,5 @@
 #!name = 特来电 · 打卡领好礼
-#!desc = 查询和推荐奖品；手动预览确认后可切换（原进度清零）；每日09:00仅无任务日打卡。切换参数：teld_reward_choice填编号，teld_switch_confirmation填预览确认码。
+#!desc = 每日09:00仅无任务日打卡。换奖品按①推荐→②预览→③确认依次手动运行（原进度清零）：teld_reward_choice填①日志里的编号，teld_switch_confirmation填②通知里的完整确认码。
 #!author = amus1ng
 #!homepage = https://github.com/amus1ng/loon-plugins
 #!system = iOS,iPadOS
@@ -9,16 +9,16 @@
 #!input = teld_switch_confirmation
 
 [Script]
-http-request ^https:\/\/c2\.teld\.(cn|cc)\/gencode\/tffH5\/SignHomepage(\?|$) script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电获取登录态-活动页,requires-body=false,timeout=10,enable=true
-http-request ^https:\/\/sgi\.teld\.cn\/api\/[Ii]nvoke\?(?=.*\bSID=(ProSrv-GetCheckIn(Status|Task)|UserAPI-WEBUI-SRefreshToken)(&|$)) script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电获取登录态-接口,requires-body=true,timeout=10,enable=true
-cron "0 9 * * *" script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电每日打卡,argument="mode=run",timeout=120,enable=true
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电查看奖品,argument="mode=reward",timeout=120
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电奖品推荐,argument="mode=gifts",timeout=120
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电预览切换,argument="mode=switch-preview",timeout=120
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电确认切换,argument="mode=switch-confirm",timeout=120
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电状态检查,argument="mode=status",timeout=120
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电立即打卡,argument="mode=run",timeout=120
-generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-gift-switch,tag=特来电清除登录态,argument="mode=clear",timeout=10
+http-request ^https:\/\/c2\.teld\.(cn|cc)\/gencode\/tffH5\/SignHomepage(\?|$) script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电获取登录态-活动页,requires-body=false,timeout=10,enable=true
+http-request ^https:\/\/sgi\.teld\.cn\/api\/[Ii]nvoke\?(?=.*\bSID=(ProSrv-GetCheckIn(Status|Task)|UserAPI-WEBUI-SRefreshToken)(&|$)) script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电获取登录态-接口,requires-body=true,timeout=10,enable=true
+cron "0 9 * * *" script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电每日打卡,argument="mode=run",timeout=120,enable=true
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电查看奖品,argument="mode=reward",timeout=120
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电换奖品①推荐,argument="mode=gifts",timeout=120
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电换奖品②预览,argument="mode=switch-preview",timeout=120
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电换奖品③确认,argument="mode=switch-confirm",timeout=120
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电状态检查,argument="mode=status",timeout=120
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电立即打卡,argument="mode=run",timeout=120
+generic script-path=https://raw.githubusercontent.com/amus1ng/loon-plugins/main/loon/telaidian.js?v=20261015-guide,tag=特来电清除登录态,argument="mode=clear",timeout=10
 
 [Mitm]
 hostname = c2.teld.cn,c2.teld.cc,sgi.teld.cn

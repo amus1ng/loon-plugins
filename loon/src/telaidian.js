@@ -325,10 +325,11 @@ var TeldLoon = (function () {
       assertScope(session, owner);
       save({ owner: ownerHash(session), createdAt: Date.now(), gifts: gifts }, CATALOG);
       var lines = gifts.map(function (gift, i) { return (i + 1) + ". " + giftText(gift) + "\n理由：" + reason(gift); });
-      console.log("[特来电] 当前账号可比较奖品列表\n" + lines.join("\n\n"));
+      console.log("[特来电] 当前账号可比较奖品列表（行首数字即编号，无需其他ID）\n" + lines.join("\n\n"));
       return notify("奖品推荐：省事实用优先", describe(state) + "\n\n" + lines.slice(0, 3).join("\n") +
         "\n共 " + gifts.length + " 项，完整编号见本次脚本日志。后续任务与券使用条件未核实，不代表全程无额外要求。" +
-        (Number(state.days) > 0 ? "\n你已坚持 " + state.days + " 天，更换会清零；没有充分收益依据时建议先保留当前挑战。" : ""));
+        (Number(state.days) > 0 ? "\n你已坚持 " + state.days + " 天，更换会清零；没有充分收益依据时建议先保留当前挑战。" : "") +
+        "\n不换无需操作。要换：15分钟内在插件参数 teld_reward_choice 填编号（行首数字，如 3），再运行“特来电换奖品②预览”。");
     }
     assertSwitchable(state);
     var attempt = sha(ownerHash(session) + ":" + state.id);
@@ -356,7 +357,7 @@ var TeldLoon = (function () {
       return notify("切换预览：尚未提交", describe(state) + "\n目标奖品：" + giftText(selected) +
         "\n更换将放弃当前挑战，清零现有 " + state.days + " 天进度并重新开始。券门槛、后续任务和领取条件请先在官方页面核对。" +
         "\n如确认，在插件参数 teld_switch_confirmation 填入：" + pending.code +
-        "\n10分钟内手动运行“特来电确认切换”；账号或挑战变化将使本次预览失效。");
+        "\n10分钟内手动运行“特来电换奖品③确认”；不换则不填、不运行。账号或挑战变化将使本次预览失效。");
     }
     var plan = read(PLAN), confirmation = String($persistentStore.read(CONFIRM) || "").trim();
     if (!plan || !confirmation || confirmation !== plan.code) fail("confirmation_required");
@@ -420,12 +421,12 @@ var TeldLoon = (function () {
       account_changed: "运行时检测到账号已切换，已停止；请重新运行状态检查。",
       catalog_failed: "候选奖品查询失败或格式变化，请重新获取登录态或查看官方活动页。",
       catalog_empty: "当前没有字段完整的可比较奖品，请查看官方活动页。",
-      catalog_stale: "请先运行“特来电奖品推荐”，获取当前账号的新列表和编号。",
-      choice_required: "请在插件参数 teld_reward_choice 填入推荐列表里的目标编号，再运行切换预览。",
+      catalog_stale: "推荐列表不存在、属于其他账号或已超过15分钟。请先运行“特来电换奖品①推荐”，获取当前账号的新列表和编号。",
+      choice_required: "请在插件参数 teld_reward_choice 填入推荐日志里的编号（行首数字，如 3），再运行“特来电换奖品②预览”。",
       switch_inactive: "仅允许更换进行中的挑战，且必须能确认当前奖品和已打卡天数；请查看官方活动页。",
       same_reward: "目标与当前奖品相同或显示信息无法区分，已停止，避免清零进度。",
       target_ambiguous: "候选中存在同名同天数奖品，当前接口又无法提供活动标识，不能可靠核对具体目标；请在官方页面切换。",
-      confirmation_required: "尚未确认清零。请先运行切换预览，将通知中的完整确认码填入 teld_switch_confirmation。",
+      confirmation_required: "尚未确认清零，本次没有提交切换。顺序是：①推荐 → 填编号 → ②预览 → 把预览通知里的完整确认码（清零并更换-…）填入 teld_switch_confirmation → 10分钟内运行③确认。",
       plan_stale: "账号、挑战、进度、目标奖品或预览有效期发生变化，请重新预览并确认。",
       switch_already_attempted: "当前挑战已经尝试过切换，不重复提交；请在官方活动页核对结果。",
       switch_unverified: "未能确认切换到目标奖品，不自动重试；请立即在官方活动页核对当前挑战。",

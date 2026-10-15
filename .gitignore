@@ -6,3 +6,6 @@ node_modules/
 
 # Rebuildable local download bundle.
 /loon/*.zip
+
+# Local maintainer handoff notes.
+/CLAUDE.md

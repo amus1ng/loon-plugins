@@ -1,0 +1,17 @@
+#!name = 特来电 · 打卡领好礼
+#!desc = 每日09:00仅无任务日打卡；有任务提醒；捕获活动H5登录态并本机续期。需先在Loon导入同名telaidian.js脚本。
+#!author = Codex
+#!system = iOS,iPadOS
+#!system_version = 15.0
+#!date = 2026-10-15
+
+[Script]
+http-request ^https:\/\/c2\.teld\.(cn|cc)\/gencode\/tffH5\/SignHomepage(\?|$) script-path=telaidian.js,tag=特来电获取登录态-活动页,requires-body=false,timeout=10,enable=true
+http-request ^https:\/\/sgi\.teld\.cn\/api\/[Ii]nvoke\?(?=.*\bSID=(ProSrv-GetCheckIn(Status|Task)|UserAPI-WEBUI-SRefreshToken)(&|$)) script-path=telaidian.js,tag=特来电获取登录态-接口,requires-body=true,timeout=10,enable=true
+cron "0 9 * * *" script-path=telaidian.js,tag=特来电每日打卡,argument="mode=run",timeout=120,enable=true
+generic script-path=telaidian.js,tag=特来电状态检查,argument="mode=status",timeout=120
+generic script-path=telaidian.js,tag=特来电立即打卡,argument="mode=run",timeout=120
+generic script-path=telaidian.js,tag=特来电清除登录态,argument="mode=clear",timeout=10
+
+[Mitm]
+hostname = c2.teld.cn,c2.teld.cc,sgi.teld.cn

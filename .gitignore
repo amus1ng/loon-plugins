@@ -1,0 +1,8 @@
+# Local investigation material can contain login credentials or private traces.
+/recon/
+/.local/
+node_modules/
+*.log
+
+# Rebuildable local download bundle.
+/loon/*.zip

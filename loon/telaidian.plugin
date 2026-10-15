@@ -1,6 +1,6 @@
 #!name = 特来电 · 打卡领好礼
 #!desc = 查询和推荐奖品；手动预览确认后可切换（原进度清零）；每日09:00仅无任务日打卡。切换参数：teld_reward_choice填编号，teld_switch_confirmation填预览确认码。
-#!author = Codex
+#!author = amus1ng
 #!homepage = https://github.com/amus1ng/loon-plugins
 #!system = iOS,iPadOS
 #!system_version = 15.0
